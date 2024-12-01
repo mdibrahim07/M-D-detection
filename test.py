@@ -42,13 +42,29 @@ def final_ear(shape):
     ear = (leftEAR + rightEAR) / 2.0
     return (ear, leftEye, rightEye)
 
-ap = argparse.ArgumentParser()
-ap.add_argument("-w", "--webcam", type=int, default=0, help="index of webcam on system")
-args = vars(ap.parse_args())
+def lip_distance(shape):
+    # Extract upper and lower lip points
+    top_lip = np.concatenate((shape[50:53], shape[61:64]))
+    low_lip = np.concatenate((shape[56:59], shape[65:68]))
+    top_mean = np.mean(top_lip, axis=0)
+    low_mean = np.mean(low_lip, axis=0)
+    # Calculate vertical distance
+    distance = abs(top_mean[1] - low_mean[1])
+    return distance
 
+# Parameters for drowsiness detection
 EYE_AR_THRESH = 0.25
 EYE_AR_CONSEC_FRAMES = 70  # Approx. 3 seconds at 20 FPS
 COUNTER = 0
+
+# Parameters for yawn detection
+YAWN_THRESH = 20  # Threshold for mouth opening
+YAWN_COUNT_THRESHOLD = 3  # Trigger after 3 yawns
+yawn_counter = 0
+
+ap = argparse.ArgumentParser()
+ap.add_argument("-w", "--webcam", type=int, default=0, help="index of webcam on system")
+args = vars(ap.parse_args())
 
 print("-> Loading the predictor and detector...")
 detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
@@ -70,16 +86,34 @@ try:
             shape = predictor(gray, rect)
             shape = face_utils.shape_to_np(shape)
 
+            # Eye detection and EAR calculation
             ear, leftEye, rightEye = final_ear(shape)
-
             leftEyeHull = cv2.convexHull(leftEye)
             rightEyeHull = cv2.convexHull(rightEye)
             cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
             cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
 
+            # Mouth detection and yawn calculation
+            distance = lip_distance(shape)
+            cv2.putText(frame, "Mouth Dist: {:.2f}".format(distance), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            if distance > YAWN_THRESH:  # Check if mouth is open wide enough
+                yawn_counter += 1  # Increment the yawn counter
+                cv2.putText(frame, "Yawn Alert", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+                # Trigger alert if yawning consecutively
+                if yawn_counter > YAWN_COUNT_THRESHOLD:
+                    if not buzzer_active:
+                        buzzer_active = True
+                        t = Thread(target=sound_buzzer)
+                        t.daemon = True
+                        t.start()
+            else:
+                yawn_counter = 0  # Reset yawn counter
+
             if ear < EYE_AR_THRESH:
                 COUNTER += 1
-                if COUNTER >= EYE_AR_CONSEC_FRAMES:  # Eyes closed for >3 seconds
+                if COUNTER >= EYE_AR_CONSEC_FRAMES:
                     if not buzzer_active:
                         buzzer_active = True
                         t = Thread(target=sound_buzzer)
